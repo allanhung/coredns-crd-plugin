@@ -138,11 +138,12 @@ func endpointHostnameIndexFunc(obj interface{}) ([]string, error) {
 }
 
 func (ctrl *KubeController) getEndpointByName(host string, clientIP net.IP) (lep LocalDNSEndpoint) {
+	queryHost := strings.ToLower(host)
 	log.Infof("Index key %+v", host)
-	objs, _ := ctrl.epc.GetIndexer().ByIndex(endpointHostnameIndex, strings.ToLower(host))
+	objs, _ := ctrl.epc.GetIndexer().ByIndex(endpointHostnameIndex, queryHost)
 	for _, obj := range objs {
 		ep := obj.(*endpoint.DNSEndpoint)
-		lep = extractLocalEndpoint(ep, clientIP, host)
+		lep = extractLocalEndpoint(ep, clientIP, queryHost)
 		if !lep.isEmpty() {
 			break
 		}

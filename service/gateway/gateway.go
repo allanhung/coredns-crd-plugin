@@ -31,6 +31,9 @@ import (
 	clog "github.com/coredns/coredns/plugin/pkg/log"
 	"github.com/coredns/coredns/request"
 	"github.com/miekg/dns"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"sigs.k8s.io/external-dns/endpoint"
 )
 
@@ -148,6 +151,35 @@ func (gw *Gateway) TXT(state request.Request, results []string, ttl endpoint.TTL
 	return append(records, &dns.TXT{Hdr: dns.RR_Header{Name: state.Name(), Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: uint32(ttl)}, Txt: results})
 }
 
+func (gw *Gateway) CoreDNSExposedIPs() ([]string, error) {
+	result := []string{}
+	config, err := rest.InClusterConfig()
+	if err != nil {
+		return nil, err
+	}
+
+	// creates the clientset
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return nil, err
+	}
+	// get services
+	services, err := clientset.CoreV1().Services(gw.opts.servicens).List(context.TODO(), metav1.ListOptions{
+		LabelSelector: metav1.FormatLabelSelector(metav1.SetAsLabelSelector(gw.opts.servicelabel)),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	for _, service := range services.Items {
+		if service.Spec.Type == "LoadBalancer" {
+			result = append(result, service.Status.LoadBalancer.Ingress[0].IP)
+			log.Infof("Service Name: %s, IP: %s", service.Name, service.Status.LoadBalancer.Ingress[0].IP)
+		}
+	}
+	return result, nil
+}
+
 func (gw *Gateway) selfAddress(state request.Request) (records []dns.RR) {
 	// TODO: need to do self-index lookup for that i need
 	// a) my own namespace - easy
@@ -161,7 +193,11 @@ func (gw *Gateway) selfAddress(state request.Request) (records []dns.RR) {
 	}
 
 	var ep = k8sctrl.Resources.DNSEndpoint.Lookup(index, net.ParseIP(state.IP()))
+	IPs, err := gw.CoreDNSExposedIPs()
+	if err != nil {
+		log.Errorf("Get CoreDNS Exposed IP error, %v", err)
+	}
 	m := new(dns.Msg)
 	m.SetReply(state.Req)
-	return gw.A(state, netutils.TargetToIP(ep.Targets), ep.TTL)
+	return gw.A(state, netutils.TargetToIP(IPs), ep.TTL)
 }
